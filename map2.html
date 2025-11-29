@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Live Stream Map Overlay (WebSocket)</title>
+    <title>Live Stream Map Overlay (Fixed Rotation)</title>
     
     <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
@@ -13,53 +13,48 @@
         body, html {
             margin: 0;
             padding: 0;
-            width: 1920px; /* Full HD width assumption */
-            height: 1080px; /* Full HD height assumption */
-            background-color: transparent; /* 重要: 透過 */
+            width: 1920px;
+            height: 1080px;
+            background-color: transparent;
             overflow: hidden;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
 
-        /* 右上のコンテナ */
         #overlay-container {
             position: absolute;
             top: 20px;
             right: 20px;
-            width: 450px; /* マップの表示幅 */
+            width: 450px;
             display: flex;
             flex-direction: column;
             align-items: flex-end;
         }
 
-        /* マップのマスク（円形や角丸にするための枠） */
         #map-wrapper {
             width: 400px;
             height: 400px;
             position: relative;
             overflow: hidden;
-            border-radius: 20px; /* 角丸 */
+            border-radius: 20px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.5);
-            background: rgba(0, 0, 0, 0.2); /* マップロード前の背景 */
+            background: rgba(0, 0, 0, 0.2);
             border: 2px solid rgba(255, 255, 255, 0.8);
         }
 
-        /* Leafletマップ本体 */
         #map {
-            width: 600px; /* 回転しても端が見えないように表示領域より大きくする */
+            width: 600px;
             height: 600px;
             position: absolute;
             top: 50%;
             left: 50%;
-            transform: translate(-50%, -50%); /* 中心配置 */
+            transform: translate(-50%, -50%);
             background: transparent;
         }
 
-        /* Leafletのコントロール（ズームボタン等）を隠す */
         .leaflet-control-container {
             display: none;
         }
 
-        /* マップ下の情報表示エリア */
         #stats-container {
             margin-top: 10px;
             text-align: right;
@@ -76,7 +71,7 @@
         .stat-line {
             font-size: 28px;
             line-height: 1.2;
-            font-family: monospace; /* 等幅フォントで数字のブレを防ぐ */
+            font-family: monospace;
         }
 
         .stat-sub {
@@ -84,12 +79,10 @@
             color: #ddd;
         }
 
-        /* ピンアイコンのスタイル補正 */
         .custom-pin-icon {
             background: transparent;
         }
         
-        /* 接続状態表示（デバッグ用・必要なければdisplay:noneに） */
         #status-indicator {
             font-size: 12px;
             color: #aaa;
@@ -100,12 +93,9 @@
 <body>
 
     <div id="overlay-container">
-        <!-- マップエリア -->
         <div id="map-wrapper">
             <div id="map"></div>
         </div>
-        
-        <!-- 情報エリア -->
         <div id="stats-container">
             <div class="stat-line" id="speed-dist">0km/h (計 0.0km)</div>
             <div class="stat-line stat-sub" id="coords">Waiting for WS...</div>
@@ -113,26 +103,30 @@
         </div>
     </div>
 
-    <!-- Leaflet JS -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
     <script>
         // --- 設定 ---
         const ZOOM_LEVEL = 16;
         const GEOJSON_PATH = 'assets/JapanMap.geojson';
-        const WS_URL = 'ws://localhost:8888'; //localhost
-        const RECONNECT_INTERVAL = 10000; // 10秒
+        const WS_URL = 'ws://localhost:8888';
+        const RECONNECT_INTERVAL = 10000;
         
-        // --- 変数初期化 ---
+        // 【重要】向きの補正設定
+        // 北を向いた時にまだずれている場合はここを 90, 180, 270, -90 などに変更してください
+        // 自動補正を入れていますが、機種によっては手動調整が必要です。
+        const HEADING_OFFSET = 0; 
+        
+        // --- 変数 ---
         let map;
         let currentMarker;
         let pathPolyline;
-        let pathCoords = []; // 座標履歴 [lat, lng]
-        let totalDistance = 0; // メートル
+        let pathCoords = [];
+        let totalDistance = 0;
         let lastLatLng = null;
         let ws = null;
 
-        // --- SVGピンの定義 ---
+        // --- SVGピン ---
         const svgPin = `
         <svg width="100" height="100" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
           <defs>
@@ -165,7 +159,7 @@
             iconAnchor: [40, 40]
         });
 
-        // --- マップ初期化 ---
+        // --- 初期化 ---
         function initMap() {
             map = L.map('map', {
                 zoomControl: false,
@@ -174,7 +168,7 @@
                 fadeAnimation: false,
                 markerZoomAnimation: false,
                 background: 'transparent'
-            }).setView([35.6895, 139.6917], ZOOM_LEVEL); // 初期値：東京
+            }).setView([35.6895, 139.6917], ZOOM_LEVEL);
 
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 opacity: 0.9,
@@ -189,44 +183,33 @@
             }).addTo(map);
 
             fetch(GEOJSON_PATH)
-                .then(response => {
-                    if (!response.ok) throw new Error("GeoJSON not found");
-                    return response.json();
-                })
+                .then(res => { if(!res.ok) throw new Error(); return res.json(); })
                 .then(data => {
                     L.geoJSON(data, {
-                        style: {
-                            color: "#00ff00",
-                            weight: 2,
-                            opacity: 0.6,
-                            fillOpacity: 0
-                        }
+                        style: { color: "#00ff00", weight: 2, opacity: 0.6, fillOpacity: 0 }
                     }).addTo(map);
                 })
-                .catch(err => console.log('GeoJSON info:', err));
+                .catch(err => console.log('GeoJSON not found/loaded'));
         }
 
-        // --- WebSocket接続 & 位置情報更新 ---
+        // --- WebSocket ---
         function connectWebSocket() {
             updateStatus("Connecting to " + WS_URL + " ...");
-            
             try {
                 ws = new WebSocket(WS_URL);
             } catch (e) {
-                console.error("WS Init Error:", e);
                 scheduleReconnect();
                 return;
             }
 
             ws.onopen = () => {
-                console.log('WebSocket Connected');
+                console.log('WS Connected');
                 updateStatus("Connected");
             };
 
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    // 期待フォーマット: { "lat": 0, "lon": 0, "speed": 0 }
                     if (data.lat !== undefined && data.lon !== undefined) {
                         updatePosition(data.lat, data.lon, data.speed);
                     }
@@ -235,47 +218,35 @@
                 }
             };
 
-            ws.onclose = (e) => {
-                console.log('WebSocket Closed', e);
+            ws.onclose = () => {
                 updateStatus("Disconnected. Retrying in 10s...");
                 scheduleReconnect();
             };
 
-            ws.onerror = (err) => {
-                console.error('WebSocket Error', err);
-                ws.close(); // Closeを呼んでoncloseへ移行
+            ws.onerror = () => {
+                ws.close();
             };
         }
 
         function scheduleReconnect() {
-            setTimeout(() => {
-                connectWebSocket();
-            }, RECONNECT_INTERVAL);
+            setTimeout(connectWebSocket, RECONNECT_INTERVAL);
         }
 
         function updatePosition(lat, lng, speedRaw) {
-            // speedRawの単位が m/s か km/h か不明ですが、
-            // 一般的なGPS生データ(m/s)と仮定して km/h に変換します。
-            // もし元データがすでに km/h なら "* 3.6" を削除してください。
             const speedMs = parseFloat(speedRaw) || 0;
             const speedKmh = (speedMs * 3.6).toFixed(0); 
-            
             const currentLatLng = L.latLng(lat, lng);
 
-            // マーカー更新
             if (!currentMarker) {
                 currentMarker = L.marker(currentLatLng, {icon: pinIcon}).addTo(map);
             } else {
                 currentMarker.setLatLng(currentLatLng);
             }
 
-            // マップ中心移動
             map.panTo(currentLatLng, {animate: false});
 
-            // 距離計算と軌跡
             if (lastLatLng) {
                 const dist = lastLatLng.distanceTo(currentLatLng);
-                // ノイズ対策: わずかな移動は無視 (例: 1m未満)
                 if (dist > 1) { 
                     totalDistance += dist;
                     pathCoords.push(currentLatLng);
@@ -287,7 +258,6 @@
                 pathCoords.push(currentLatLng);
             }
 
-            // 表示更新
             const distKm = (totalDistance / 1000).toFixed(1);
             document.getElementById('speed-dist').innerText = `${speedKmh}km/h (計 ${distKm}km)`;
             document.getElementById('coords').innerText = `${lat.toFixed(5)} / ${lng.toFixed(5)}`;
@@ -298,40 +268,60 @@
             if(el) el.innerText = msg;
         }
 
-        // --- コンパス (Heading Up) ---
-        // WebSocketに方位が含まれていないため、引き続き端末センサーを使用します。
-        // WebViewによっては動作しない可能性があります。
+        // --- コンパス (修正済み) ---
         function startCompass() {
             if (window.DeviceOrientationEvent) {
                 window.addEventListener('deviceorientation', (event) => {
                     let heading = 0;
+                    
+                    // iOSとAndroid/その他で取得プロパティが違う
                     if (event.webkitCompassHeading) {
                         heading = event.webkitCompassHeading;
                     } else if (event.alpha) {
+                        // Androidの場合、標準では北=0だが、機種依存が激しい
                         heading = 360 - event.alpha; 
                     }
-                    rotateMap(heading);
+
+                    // --- 画面の向き(回転)補正 ---
+                    // 横持ち(Landscape)の場合、画面の角度(90度など)を足し合わせる必要があります
+                    let screenAngle = 0;
+                    if (window.screen && window.screen.orientation) {
+                        screenAngle = window.screen.orientation.angle;
+                    } else if (typeof window.orientation !== 'undefined') {
+                        screenAngle = window.orientation;
+                    }
+
+                    // ヘディング(方位) + 画面回転 + 手動オフセット
+                    let finalHeading = heading + screenAngle + HEADING_OFFSET;
+
+                    rotateMap(finalHeading);
                 }, true);
             }
         }
 
         function rotateMap(heading) {
             const mapDiv = document.getElementById('map');
+            // マップ全体を回転（北を上にする基準から、進行方向を上にするためマイナス回転）
             mapDiv.style.transform = `translate(-50%, -50%) rotate(${-heading}deg)`;
 
+            // ピンは画面に対して常に上を向くように、マップの回転を打ち消す（プラス回転）
             if (currentMarker) {
                 const iconElement = currentMarker.getElement();
                 if (iconElement) {
+                    // 既存のtranslateなどは維持しないと位置がずれる可能性があるが、
+                    // L.divIconは通常 margin-left/top で位置合わせするため transform は空または scale 等
+                    // ここではシンプルに rotate を適用
+                    // ※Leafletの内部的なtransformと競合しないよう、icon内部のSVGなどを回すのが安全だが
+                    // 簡易的に要素自体を回す
                     const currentTransform = iconElement.style.transform.split(' rotate')[0];
                     iconElement.style.transform = `${currentTransform} rotate(${heading}deg)`;
                 }
             }
         }
 
-        // --- 実行 ---
         window.onload = () => {
             initMap();
-            connectWebSocket(); // Geolocationの代わりにWS接続を開始
+            connectWebSocket();
             startCompass();
         };
 
