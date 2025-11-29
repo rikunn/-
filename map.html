@@ -5,264 +5,331 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Live Stream Map Overlay</title>
     
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRS9BMY=" crossorigin=""/>
-
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
     <style>
+        /* 基本設定: 背景透過 */
         body, html {
             margin: 0;
             padding: 0;
-            width: 1920px;
-            height: 1080px;
-            background-color: transparent;
+            width: 1920px; /* Full HD width assumption */
+            height: 1080px; /* Full HD height assumption */
+            background-color: transparent; /* 重要: 透過 */
             overflow: hidden;
-            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
 
+        /* 右上のコンテナ */
         #overlay-container {
             position: absolute;
             top: 20px;
             right: 20px;
-            width: 450px; 
+            width: 450px; /* マップの表示幅 */
             display: flex;
             flex-direction: column;
             align-items: flex-end;
         }
 
-        /* マップ表示領域（マスク） */
+        /* マップのマスク（円形や角丸にするための枠） */
         #map-wrapper {
-            width: 450px;
-            height: 350px;
-            border-radius: 10px;
-            overflow: hidden; 
+            width: 400px;
+            height: 400px;
             position: relative;
-            background: rgba(0, 0, 0, 0.2);
-            border: 2px solid rgba(255, 255, 255, 0.5);
-            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+            overflow: hidden;
+            border-radius: 20px; /* 角丸 */
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            background: rgba(0, 0, 0, 0.2); /* マップロード前の背景 */
+            border: 2px solid rgba(255, 255, 255, 0.8);
         }
 
-        /* 実際に回転・移動するマップ要素 */
+        /* Leafletマップ本体 */
         #map {
-            width: 150%; 
-            height: 150%;
-            top: -25%; 
-            left: -25%; 
+            width: 600px; /* 回転しても端が見えないように表示領域より大きくする */
+            height: 600px;
             position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%); /* 中心配置 */
             background: transparent;
         }
 
-        .info-panel {
-            margin-top: 5px;
-            color: white;
+        /* Leafletのコントロール（ズームボタン等）を隠す */
+        .leaflet-control-container {
+            display: none;
+        }
+
+        /* マップ下の情報表示エリア */
+        #stats-container {
+            margin-top: 10px;
             text-align: right;
+            color: white;
+            text-shadow: 
+                2px 2px 0 #000, 
+                -1px -1px 0 #000,  
+                1px -1px 0 #000,
+                -1px 1px 0 #000,
+                1px 1px 0 #000;
             font-weight: bold;
-            text-shadow: 2px 2px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;
-            font-size: 24px;
-            line-height: 1.4;
-            width: 100%;
         }
 
-        .coordinates {
-            font-family: 'Courier New', Courier, monospace;
+        .stat-line {
+            font-size: 28px;
+            line-height: 1.2;
+            font-family: monospace; /* 等幅フォントで数字のブレを防ぐ */
         }
 
-        /* Leafletカスタマイズ */
-        .leaflet-control-container { display: none; } /* コントロール非表示 */
-        .leaflet-container { background: transparent; }
+        .stat-sub {
+            font-size: 22px;
+            color: #ddd;
+        }
 
-        /* 時間帯による明度制御用クラス */
-        .tiles-day { filter: brightness(1.0); }
-        .tiles-night { filter: brightness(0.6) contrast(1.2); }
+        /* ピンアイコンのスタイル補正 */
+        .custom-pin-icon {
+            background: transparent;
+        }
     </style>
 </head>
 <body>
 
     <div id="overlay-container">
+        <!-- マップエリア -->
         <div id="map-wrapper">
             <div id="map"></div>
         </div>
-        <div class="info-panel">
-            <div id="speed-dist">0km/h (計 0.0km)</div>
-            <div id="coords" class="coordinates">00.0000 / 000.0000</div>
+        
+        <!-- 情報エリア -->
+        <div id="stats-container">
+            <div class="stat-line" id="speed-dist">0km/h (計 0.0km)</div>
+            <div class="stat-line stat-sub" id="coords">00.0000 / 000.0000</div>
         </div>
     </div>
 
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
     <script>
-        // 設定
-        const ASSETS = {
-            geoJson: 'JapanMap.geojson',
-            pointIcon: 'point.png'
-        };
+        // --- 設定 ---
+        const ZOOM_LEVEL = 16; // ズームレベル
+        const GEOJSON_PATH = 'assets/JapanMap.geojson';
         
-        // 状態管理
+        // --- 変数初期化 ---
         let map;
-        let marker;
-        let polyline;
-        let pathCoordinates = [];
-        let totalDistance = 0; // meters
-        let lastLat = null;
-        let lastLng = null;
+        let currentMarker;
+        let pathPolyline;
+        let pathCoords = []; // 座標履歴 [lat, lng]
+        let totalDistance = 0; // メートル
+        let lastLatLng = null;
         let currentHeading = 0;
 
-        // 初期化
-        function init() {
-            // マップ初期化 (ズーム15, コントロールなし)
+        // --- SVGピンの定義 ---
+        const svgPin = `
+        <svg width="100" height="100" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="pinGradient1" x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" style="stop-color:#00c6ff;" />
+              <stop offset="100%" style="stop-color:#0072ff;" />
+            </linearGradient>
+            <filter id="dropShadow1" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur in="SourceAlpha" stdDeviation="3"/>
+              <feOffset dx="1" dy="2"/>
+              <feMerge>
+                <feMergeNode/>
+                <feMergeNode in="SourceGraphic"/>
+              </feMerge>
+            </filter>
+          </defs>
+          <g filter="url(#dropShadow1)">
+            <path d="M50 10 L75 70 L50 60 L25 70 Z" 
+                  fill="url(#pinGradient1)" 
+                  stroke="#ffffff" 
+                  stroke-width="1.5" 
+                  stroke-linejoin="round"/>
+          </g>
+        </svg>`;
+
+        const pinIcon = L.divIcon({
+            className: 'custom-pin-icon',
+            html: svgPin,
+            iconSize: [80, 80], // 表示サイズ
+            iconAnchor: [40, 40] // アイコンの中心 (SVGの中心に合わせる)
+        });
+
+        // --- マップ初期化 ---
+        function initMap() {
+            // 背景透過のため zoomControlなどを無効化
             map = L.map('map', {
                 zoomControl: false,
                 attributionControl: false,
-                background: false
-            }).setView([35.6895, 139.6917], 15);
+                zoomAnimation: false, // 回転時のちらつき防止
+                fadeAnimation: false,
+                markerZoomAnimation: false,
+                background: 'transparent' // Leafletの背景指定
+            }).setView([35.6895, 139.6917], ZOOM_LEVEL); // 初期値：東京
 
-            // 時間帯チェック
-            const hour = new Date().getHours();
-            const isNight = (hour >= 18 || hour < 6);
-            const tileClass = isNight ? 'tiles-night' : 'tiles-day';
+            // OpenStreetMapレイヤー
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                opacity: 0.9, // 少し透過させて背景になじませる
+                maxZoom: 19
+            }).addTo(map);
 
-            // 国土地理院地図 (標準)
-            L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
-                maxZoom: 18,
-                className: tileClass,
-                opacity: 0.9
+            // 軌跡用ポリライン（赤線）
+            pathPolyline = L.polyline([], {
+                color: 'red',
+                weight: 5,
+                opacity: 0.8,
+                lineJoin: 'round'
             }).addTo(map);
 
             // GeoJSON読み込み (県境)
-            fetch(ASSETS.geoJson)
+            fetch(GEOJSON_PATH)
                 .then(response => {
-                    if(!response.ok) throw new Error("GeoJSON not found");
+                    if (!response.ok) throw new Error("GeoJSON not found");
                     return response.json();
                 })
                 .then(data => {
                     L.geoJSON(data, {
                         style: {
-                            color: isNight ? '#aaa' : '#555', // 夜は少し明るい線、昼は暗い線
+                            color: "#00ff00", // 境界線の色 (緑など目立つ色)
                             weight: 2,
                             opacity: 0.6,
-                            fill: false
+                            fillOpacity: 0 // 塗りつぶしなし
                         }
                     }).addTo(map);
                 })
-                .catch(e => console.log('GeoJSON load skipped or failed: ' + e));
-
-            // 現在位置アイコン設定
-            const icon = L.icon({
-                iconUrl: ASSETS.pointIcon,
-                iconSize: [40, 40],
-                iconAnchor: [20, 20]
-            });
-
-            // マーカー配置 (初期値)
-            marker = L.marker([35.6895, 139.6917], {icon: icon, zIndexOffset: 1000}).addTo(map);
-
-            // 軌跡ライン (赤)
-            polyline = L.polyline([], {color: 'red', weight: 5, opacity: 0.8}).addTo(map);
-
-            // 位置情報監視開始
-            startTracking();
-            // コンパス監視開始
-            startCompass();
+                .catch(err => console.log('GeoJSON load error (or running locally without server):', err));
         }
 
+        // --- 位置情報追跡 ---
         function startTracking() {
             if (!navigator.geolocation) {
-                document.getElementById('coords').innerText = "GPS Not Supported";
+                alert("Geolocation is not supported by your browser");
                 return;
             }
 
-            navigator.geolocation.watchPosition(
-                (position) => {
-                    const lat = position.coords.latitude;
-                    const lng = position.coords.longitude;
-                    const speedMs = position.coords.speed || 0; // m/s
-                    const speedKmh = (speedMs * 3.6).toFixed(0); // km/h
-
-                    updateMapPosition(lat, lng);
-                    updateStats(lat, lng, speedKmh);
-                },
-                (error) => {
-                    console.error("GPS Error", error);
-                },
-                {
-                    enableHighAccuracy: true,
-                    maximumAge: 0,
-                    timeout: 10000
-                }
-            );
+            navigator.geolocation.watchPosition(updatePosition, handleError, {
+                enableHighAccuracy: true,
+                maximumAge: 0,
+                timeout: 5000
+            });
         }
 
-        function updateMapPosition(lat, lng) {
-            const newLatLng = new L.LatLng(lat, lng);
+        function updatePosition(position) {
+            const lat = position.coords.latitude;
+            const lng = position.coords.longitude;
+            const speedMs = position.coords.speed || 0; // m/s
+            const speedKmh = (speedMs * 3.6).toFixed(0); // km/h変換
 
-            // 距離計算と加算
-            if (lastLat !== null && lastLng !== null) {
-                const dist = map.distance([lastLat, lastLng], newLatLng); // meters
-                // 異常値除外 (瞬時に飛びすぎた場合は無視するなど必要なら追加)
-                if (dist > 0.5) { // 少しでも動いたら
-                    totalDistance += dist;
-                }
+            const currentLatLng = L.latLng(lat, lng);
+
+            // マーカー更新
+            if (!currentMarker) {
+                currentMarker = L.marker(currentLatLng, {icon: pinIcon}).addTo(map);
+            } else {
+                currentMarker.setLatLng(currentLatLng);
             }
 
-            lastLat = lat;
-            lastLng = lng;
-
-            // 軌跡更新
-            pathCoordinates.push(newLatLng);
-            polyline.setLatLngs(pathCoordinates);
-
-            // マーカー移動
-            marker.setLatLng(newLatLng);
-
             // マップ中心移動
-            map.panTo(newLatLng, {animate: false});
-        }
+            map.panTo(currentLatLng, {animate: false});
 
-        function updateStats(lat, lng, speedKmh) {
-            // 距離表示 (km)
-            const totalDistKm = (totalDistance / 1000).toFixed(1);
-            
-            // DOM更新
-            document.getElementById('speed-dist').innerText = `${speedKmh}km/h (計 ${totalDistKm}km)`;
+            // 距離計算と軌跡
+            if (lastLatLng) {
+                const dist = lastLatLng.distanceTo(currentLatLng);
+                if (dist > 2) { // ノイズ対策: 2m以上動いたら記録
+                    totalDistance += dist;
+                    pathCoords.push(currentLatLng);
+                    pathPolyline.setLatLngs(pathCoords);
+                    lastLatLng = currentLatLng;
+                }
+            } else {
+                lastLatLng = currentLatLng;
+                pathCoords.push(currentLatLng);
+            }
+
+            // 画面表示更新
+            const distKm = (totalDistance / 1000).toFixed(1);
+            document.getElementById('speed-dist').innerText = `${speedKmh}km/h (計 ${distKm}km)`;
             document.getElementById('coords').innerText = `${lat.toFixed(5)} / ${lng.toFixed(5)}`;
         }
 
-        // コンパス処理 (マップ回転)
+        function handleError(error) {
+            console.warn('Geolocation Error:', error);
+        }
+
+        // --- コンパス (Heading Up) ---
+        // デバイスの向きに合わせてマップを回転させる
         function startCompass() {
-            // iOS 13+ 対応
-            if (typeof DeviceOrientationEvent.requestPermission === 'function') {
-                DeviceOrientationEvent.requestPermission()
-                    .then(response => {
-                        if (response === 'granted') {
-                            window.addEventListener('deviceorientation', handleOrientation);
-                        }
-                    })
-                    .catch(console.error);
-            } else {
-                window.addEventListener('deviceorientation', handleOrientation);
+            if (window.DeviceOrientationEvent) {
+                // iOS 13+ permission request (if needed, usually triggered by user action)
+                if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    // 自動では呼べないため、本来は「開始ボタン」が必要ですが、
+                    // ここではイベントリスナー追加のみ記述します。
+                    // 実際のアプリではユーザー操作のクリックイベント内で requestPermission を呼んでください。
+                }
+
+                window.addEventListener('deviceorientation', (event) => {
+                    let heading = 0;
+
+                    // iOS (webkitCompassHeading) vs Android (alpha)
+                    if (event.webkitCompassHeading) {
+                        heading = event.webkitCompassHeading;
+                    } else if (event.alpha) {
+                        // Androidのalphaは北=0ではない場合があるが、簡易的に使用
+                        // w3c標準では alpha=0 は北。ただしデバイスの持ち方による。
+                        // ここでは一般的な補正を使用
+                        heading = 360 - event.alpha; 
+                    }
+
+                    currentHeading = heading;
+                    rotateMap(heading);
+                }, true);
             }
         }
 
-        function handleOrientation(event) {
-            let heading = 0;
-
-            if (event.webkitCompassHeading) {
-                // iOS
-                heading = event.webkitCompassHeading;
-            } else if (event.alpha) {
-                // Android (absolute check required but simplified here)
-                heading = 360 - event.alpha;
-            }
-
-            // マップ全体を回転させてヘディングアップにする
-            // 現在位置を中心に回転させるため、#map div全体をCSS transformで回す
+        function rotateMap(heading) {
             const mapDiv = document.getElementById('map');
-            
-            // 回転方向は逆にする（地図を回して進行方向を上にするため）
-            mapDiv.style.transform = `rotate(-${heading}deg)`;
-            
-            // 注: マーカー等も一緒に回転してしまうが、アイコンが円形なら違和感は少ない。
-            // 本格的なHeadUp対応はMapbox GL JS等が必要だが、Leafletでの簡易実装はこれが限界。
+            // マップ全体を回転（ヘディングアップ）
+            // マップが北を基準に描画されているため、heading分だけマイナス回転させると
+            // 進行方向が上に来る。
+            mapDiv.style.transform = `translate(-50%, -50%) rotate(${-heading}deg)`;
+
+            // ピン（アイコン）は常に画面の上（進行方向）を向かせたい。
+            // SVGのピン自体が上を向くデザインなので、
+            // マップコンテナと一緒に回転してしまうピンを、逆回転させて
+            // 常に画面に対して垂直を保つ。
+            if (currentMarker) {
+                const iconElement = currentMarker.getElement();
+                if (iconElement) {
+                    // アイコン自体を逆回転させて、常に画面上方向を向くようにする
+                    // mapDivが回転しているので、その子要素であるiconも回転している。
+                    // iconに rotate(heading) を与えれば相殺される。
+                    iconElement.style.transform += ` rotate(${heading}deg)`;
+                    
+                    // Leafletはtransformを座標指定に使っているため、既存のtransformを維持しつつ回転を追加する必要があるが、
+                    // L.divIconのCSS更新は重くなる可能性がある。
+                    // 簡易的な方法：CSSで .leaflet-marker-icon に対して counter-rotation を適用するアプローチが一般的
+                    // 今回はSVG自体が「上向き」なので、マップが回転して「上が北」でなくなっても、
+                    // ピンは「画面の上（進行方向）」を向いていてほしい。
+                    // マップを回す = 世界を回す。
+                    // 車（ピン）は画面に対して固定。
+                    // したがって、マップdivを回すだけで、ピンはマップと一緒に回ってしまう。
+                    // ピンを「画面に対して上固定」にするには、マップの回転分を打ち消す回転が必要。
+                    
+                    // 実装ハック: Leafletのマーカーはマップペイン内にある。
+                    // マップ全体をCSS回転させるとマーカーも回る。
+                    // マーカーのDOMを取得して、逆回転させる。
+                    const currentTransform = iconElement.style.transform.split(' rotate')[0]; // 既存のtranslateのみ取得
+                    iconElement.style.transform = `${currentTransform} rotate(${heading}deg)`;
+                }
+            }
         }
 
-        window.onload = init;
+        // --- 実行 ---
+        window.onload = () => {
+            initMap();
+            startTracking();
+            startCompass();
+        };
 
     </script>
 </body>
